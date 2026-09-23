@@ -22,6 +22,11 @@
 - 目录所有权：`docs/specs/`+`docs/backlog.md`=产品；`docs/architecture/`=架构师；
   `design/`=设计师；`Tests/`+`reports/*-qa.md`=QA；`releases/`=发布。
 - 角色之间只通过文件与 git 交接，不通过聊天。
+- **流程路由裁决**：本项目的需求与实现默认走团队流程（产品角色分级 → spec/PRD →
+  bootstrap / feature-pipeline）。其他通用流程技能（如 superpowers 的 brainstorming、
+  writing-plans、subagent-driven-development）不在本项目主流程触发，避免双路由；
+  调试、验证类的通用纪律（如 systematic-debugging、verification-before-completion）
+  仍可用于主会话的临时工作。
 - 跨机器克隆后 `.team` 缺失 → 运行 `/team-init` 恢复链接（.team.local 随仓库走）。
 
 ## 流水线参数（feature-pipeline）

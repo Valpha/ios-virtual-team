@@ -67,6 +67,16 @@ resolve --bake roles/qa.md     # 记录当前基底指纹（写差分后必跑�
 
 无差分时 `--render` 直接输出基底（快路径）。跨机器克隆后 `.team` 缺失 → 跑 `/team-init` 恢复。
 
+## 与通用流程技能的共存（路由裁决）
+
+本项目体系（角色卡 + 流水线）是需求与实现的**默认路由**。其他通用流程技能
+（如 superpowers 的 brainstorming / writing-plans / subagent-driven-development）
+不在团队项目的主流程中触发，避免双路由抢管；其调试、验证类纪律
+（systematic-debugging、verification-before-completion）仍适用于主会话的临时工作。
+各项目宪法以"流程路由裁决"节声明此规则（用户指令 > 技能，宪法即用户指令）。
+superpowers 的微观纪律已编译进角色卡：需求三档分级（产品卡）、TDD 红绿与根因调试
+（工程师卡）、评审分级与超限裁决（架构师卡）、缺陷立案纪律（QA 卡）。
+
 ## 修改纪律（agent 必须遵守）
 
 1. **动手前**：跑 resolve 确定现状 → 向用户声明"即将修改【团队层基底/本项目差分】，
