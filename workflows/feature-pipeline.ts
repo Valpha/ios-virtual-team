@@ -107,7 +107,7 @@ let uiSpecPath = "";
 if (hasUI) {
   phase("设计师出 UI 规格");
   const uiSpec = await agent("设计师", { system: HONESTY }).ask<UiSpecResult>(
-    `先运行 bash .team/scripts/resolve --render roles/designer.md，读取你的生效角色卡并严格按其履职。` +
+    `先运行 python3 .team/scripts/resolve --render roles/designer.md，读取你的生效角色卡并严格按其履职。` +
       `本次任务：为 feature「${feature}」产出 UI 规格，输入是 spec（${specPath}）与现有 design/tokens。` +
       `把 UI 规格写入 design/ui-specs/${feature}.md。用中文工作与写报告。`,
   );
@@ -119,7 +119,7 @@ const engineer = agent("iOS 工程师", { system: HONESTY });
 const qaAgent = agent("QA", { system: HONESTY });
 const archAgent = agent("架构师", { system: HONESTY });
 const impl = await engineer.ask<ImplResult>(
-  `先运行 bash .team/scripts/resolve --render roles/ios-engineer.md，读取你的生效角色卡并严格按其履职。` +
+  `先运行 python3 .team/scripts/resolve --render roles/ios-engineer.md，读取你的生效角色卡并严格按其履职。` +
     `本次任务：在分支 ${branch} 上实现 feature「${feature}」。` +
     `必读输入：spec（${specPath}）${uiSpecPath ? `、UI 规格（${uiSpecPath}）` : ""}、docs/architecture/ 下的总览与 ADR。` +
     `完整测试套件由流水线统一运行，你只做编译与定向自测，不要自己跑全量 xcodebuild test。用中文工作与汇报。`,
@@ -144,13 +144,13 @@ for (let round = 1; round <= maxRounds; round++) {
   phase("QA 与架构师并行评审");
   const reviewP = Promise.all([
     qaAgent.ask<QaResult>(
-      `先运行 bash .team/scripts/resolve --render roles/qa.md，读取你的生效角色卡并严格按其履职。` +
+      `先运行 python3 .team/scripts/resolve --render roles/qa.md，读取你的生效角色卡并严格按其履职。` +
         `本次任务：验证分支 ${branch} 上的 feature「${feature}」。输入：spec（${specPath}）、分支改动（git status 与 git diff）。` +
         `完整测试套件由流水线统一运行，你不要自己跑全量 xcodebuild test，只做验收标准到测试的映射与定向验证。` +
         `报告写入 reports/${feature}-qa.md。用中文工作与写报告。`,
     ),
     archAgent.ask<ArchResult>(
-      `先运行 bash .team/scripts/resolve --render roles/architect.md，读取你的生效角色卡并严格按其履职。` +
+      `先运行 python3 .team/scripts/resolve --render roles/architect.md，读取你的生效角色卡并严格按其履职。` +
         `本次任务：对分支 ${branch} 的全部改动（git status 与 git diff）做架构一致性评审，` +
         `对照 docs/architecture/overview.md、docs/architecture/adr/ 与渲染出的角色卡中的依赖规则。` +
         `评审报告写入 reports/${feature}-arch-review.md，每条结论注明依据的规则条目。用中文工作与写报告。`,
@@ -186,7 +186,7 @@ for (let round = 1; round <= maxRounds; round++) {
 
 phase("发布角色准备交接说明");
 const handoff = await agent("发布", { system: HONESTY }).ask<HandoffResult>(
-  `先运行 bash .team/scripts/resolve --render roles/release.md，读取你的生效角色卡并严格按其履职。` +
+  `先运行 python3 .team/scripts/resolve --render roles/release.md，读取你的生效角色卡并严格按其履职。` +
     `本次任务：为 feature「${feature}」（分支 ${branch}，${passed ? "已通过全部评审与测试门禁" : "未完全通过，见反馈"}）` +
     `准备交接说明，写入 reports/${feature}-release-handoff.md：合入建议、版本与渠道建议、需要用户亲自执行的边界操作清单。` +
     `不执行任何上传或外部操作。用中文工作与写报告。`,
