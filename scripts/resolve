@@ -286,16 +286,16 @@ def main():
     team_o, local_o, rest = parse_args(sys.argv[1:])
     cmd = rest[0] if rest else ""
     arg = rest[1] if len(rest) > 1 else None
-    if cmd in ("--render", "--bake") or (cmd and not cmd.startswith("--")):
-        if not arg:
-            die("需要 <relpath> 参数，如 roles/qa.md")
+    if len(rest) >= 2 and rest[0] in ("--render", "--bake"):
         team, local = locate(team_o, local_o)
-        if cmd == "--render":
-            cmd_render(team, local, arg)
-        elif cmd == "--bake":
-            cmd_bake(team, local, arg)
+        if rest[0] == "--render":
+            cmd_render(team, local, rest[1])
         else:
-            cmd_status(team, local, arg)
+            cmd_bake(team, local, rest[1])
+        return
+    if rest and not rest[0].startswith("--"):  # 位置参数：resolve roles/qa.md → 状态查询
+        team, local = locate(team_o, local_o)
+        cmd_status(team, local, rest[0])
         return
     team, local = locate(team_o, local_o)
     if cmd == "--config" and arg:

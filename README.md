@@ -75,6 +75,8 @@ resolve --bake roles/qa.md     # 记录当前基底指纹（写差分后必跑�
    随后 `--bake`。
 3. 团队层动作 = 写 `.team/`（穿透全局），改完跑各项目 `--check` 出冲突报告。
 4. **动手后**：汇报层级、路径、影响范围、是否新增遮蔽/冲突。
+5. **绝不 rm/mv `.team/` 下的任何路径**：软链接穿透，删项目内路径 = 删全局文件。
+   团队层的回退一律走 `git -C ~/.zcode/team checkout -- <file>`。
 
 ## 流水线运行手册（feature-pipeline）
 
