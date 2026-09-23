@@ -1,5 +1,4 @@
 /* zcode-workflow
-name: feature-pipeline
 description: iOS 虚拟团队标准 feature 流水线（设计师 UI 规格 → 工程师实现 → QA 与架构师并行评审 → 完整测试套件门禁 → 发布交接说明）
 args:
   feature: { type: string, required: true, description: feature 标识（kebab-case，用于分支与报告命名） }

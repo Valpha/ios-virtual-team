@@ -1,5 +1,4 @@
 /* zcode-workflow
-name: bootstrap
 description: iOS 里程碑引导流水线（PRD 分层拆解 → 设计/架构/QA 三方评审 → UI 概念稿 → 架构选型与模块拆解 ∥ QA 测试用例 → 模块并行 TDD 开发 → 架构代码审核循环 → QA 实机测试 → 完毕提示上架，未经用户确认绝不上传）
 args:
   milestone: { type: string, required: true, description: 里程碑标识（kebab-case，用于分支与文档命名） }
@@ -223,7 +222,7 @@ let devApproved = false;
 let lastReviewFeedback = "";
 let devSummaries: ModuleDev[] = [];
 for (let round = 1; round <= devRounds; round++) {
-  phase(round === 1 ? "各模块工程师并行 TDD 开发" : "按审核建议并行修复");
+  phase("各模块工程师并行 TDD 开发与按建议修复");
   devSummaries = await Promise.all(
     moduleEngines.map(({ mod, eng }) =>
       eng.ask<ModuleDev>(
