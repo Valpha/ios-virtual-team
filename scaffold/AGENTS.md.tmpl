@@ -1,0 +1,34 @@
+# {{应用名}}
+
+## 项目速览（/team-init 时填写）
+- 应用名：{{应用名}}
+- 一句话：{{一句话定位}}
+- 技术栈：{{SwiftUI / UIKit / …}}
+- 风格方向：{{视觉方向一句话，设计师定稿后更新}}
+
+## 团队与分层规则（固定节，勿删）
+本项目使用标准 iOS 虚拟团队，完整章程见 `.team/README.md`（团队层，全局共享）。
+
+- `.team/` → **团队层基底**：改这里 = 修改所有并行项目的默认定义。
+  agent 写入前必须向用户确认目标层级；修改后须汇报影响范围与冲突报告。
+- `.team.local/` → **项目层差分**：只存差异（按节的 替换/追加/删除 指令），
+  冲突以项目为准；团队层对未差分节的更新自动流入本项目。
+- **生效定义 = 基底 + 差分**。读取、委派、流水线启动前，一律先用
+  `.team/scripts/resolve` 解析；子 agent 一律消费 `resolve --render` 的渲染产物，
+  不直接读基底或差分文件。
+- 角色委派范式：
+  `resolve --render roles/<role>.md > /tmp/<role>.md` → 子 agent prompt 指向该渲染产物
+  + 本次任务描述（子 agent 无对话记忆，prompt 必须自包含）。
+- 目录所有权：`docs/specs/`+`docs/backlog.md`=产品；`docs/architecture/`=架构师；
+  `design/`=设计师；`Tests/`+`reports/*-qa.md`=QA；`releases/`=发布。
+- 角色之间只通过文件与 git 交接，不通过聊天。
+- 跨机器克隆后 `.team` 缺失 → 运行 `/team-init` 恢复链接（.team.local 随仓库走）。
+
+## 流水线参数（feature-pipeline）
+生效参数 = 脚本默认 < `.team/workflows/feature-pipeline.config.json`（团队）
+< `.team.local/workflows/feature-pipeline.config.json`（项目，键覆盖）。
+用 `.team/scripts/resolve --config feature-pipeline` 查看合并结果。
+
+- scheme：{{Main}}
+- hasUI：true
+- maxRounds：2

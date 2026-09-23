@@ -1,0 +1,315 @@
+#!/usr/bin/env python3
+# resolve — iOS 虚拟团队分层解析工具
+# 生效定义 = 团队层基底(.team) + 项目层差分(.team.local)，冲突以项目为准。
+#
+# 用法（在项目根目录运行）:
+#   resolve <relpath>            状态：生效来源与各节归属
+#   resolve --render <relpath>   输出合并后的完整生效卡（子 agent 委派/流水线消费此产物）
+#   resolve --config <name>      流水线参数深合并（脚本默认 < 团队config < 项目config）
+#   resolve --check              列出本项目全部差分与冲突（团队基底已动过被替换的节）
+#   resolve --list               列出差分清单
+#   resolve --bake <relpath>     为差分中的 替换/删除 操作记录当前基底指纹（写差分后必跑）
+#
+# 可用 --team <dir> / --local <dir> 覆盖默认的 .team / .team.local 位置。
+# 退出码: 0 正常; 1 用法/文件错误; 2 --check 检出冲突或错误
+import hashlib, json, os, re, sys, datetime
+
+OPS = ("替换", "追加", "删除")
+
+
+def die(msg, code=1):
+    print("ERROR: " + msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def parse_args(argv):
+    team = local = None
+    rest = []
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("--team", "--local"):
+            if i + 1 >= len(argv):
+                die(a + " 需要参数")
+            if a == "--team":
+                team = argv[i + 1]
+            else:
+                local = argv[i + 1]
+            i += 2
+        else:
+            rest.append(a)
+            i += 1
+    return team, local, rest
+
+
+def locate(team, local):
+    team = team or os.path.join(os.getcwd(), ".team")
+    local = local or os.path.join(os.getcwd(), ".team.local")
+    if not os.path.isdir(team):
+        die("团队层 %s 不存在（跨机器克隆后请运行 /team-init 恢复链接）" % team)
+    return os.path.realpath(team), local
+
+
+def parse_sections(text):
+    """按 `## ` 切节；返回 (header_lines, [[title, body_lines], ...])"""
+    header, sections, cur = [], [], None
+    for ln in text.splitlines():
+        if ln.startswith("## "):
+            cur = [ln[3:].strip(), []]
+            sections.append(cur)
+        elif cur is None:
+            header.append(ln)
+        else:
+            cur[1].append(ln)
+    return header, sections
+
+
+def parse_delta(text):
+    """解析差分文件；返回 [(op, section, body_lines), ...]"""
+    ops, cur = [], None
+    for ln in text.splitlines():
+        m = re.match(r"^## (替换|追加|删除):(.+?)\s*$", ln)
+        if m:
+            cur = (m.group(1), m.group(2).strip(), [])
+            ops.append(cur)
+        elif ln.startswith("## "):
+            die("差分含未知节指令: %r（合法指令: 替换/追加/删除）" % ln)
+        elif cur is not None:
+            cur[2].append(ln)
+    return ops
+
+
+def rstrip_blank(lines):
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return lines
+
+
+def merge(base_text, delta_ops, relpath):
+    """应用差分；返回 (merged_text, provenance{节:来源}, errors[str])"""
+    header, sections = parse_sections(base_text)
+    index = {t: b for t, b in sections}
+    prov = {t: "base" for t in index}
+    removed = set()
+    errors = []
+    for op, sect, body in delta_ops:
+        if sect not in index:
+            errors.append("差分引用了基底不存在的节: %s:%s" % (relpath, sect))
+            continue
+        if op == "替换":
+            index[sect] = rstrip_blank(list(body))
+            prov[sect] = "替换(项目为准)"
+        elif op == "追加":
+            extra = rstrip_blank(list(body))
+            if extra:
+                index[sect] = index[sect] + ([""] if index[sect] and index[sect][-1].strip() else []) + extra
+                prov[sect] = prov[sect] if prov[sect].startswith("替换") else "追加(基底+项目)"
+        elif op == "删除":
+            removed.add(sect)
+            prov[sect] = "已删除(项目为准)"
+    out = list(header)
+    for t, _ in sections:
+        if t in removed:
+            continue
+        out.append("## " + t)
+        out.extend(index[t])
+    return "\n".join(out) + "\n", prov, errors
+
+
+def section_sha(title, body):
+    blob = ("## " + title + "\n" + "\n".join(body)).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
+
+
+def meta_path(local, relpath):
+    return os.path.join(local, ".meta", relpath + ".json")
+
+
+def cmd_status(team, local, relpath):
+    base_f = os.path.join(team, relpath)
+    delta_f = os.path.join(local, relpath)
+    if not os.path.isfile(base_f):
+        die("基底不存在: %s" % base_f)
+    base_text = open(base_f, encoding="utf-8").read()
+    _, sections = parse_sections(base_text)
+    print("生效路径: %s" % relpath)
+    print("团队层基底: %s" % base_f)
+    has_delta = os.path.isfile(delta_f)
+    if not has_delta:
+        print("项目层差分: (无) — 生效定义 = 基底原样")
+        for t, _ in sections:
+            print("  [base] %s" % t)
+        return
+    print("项目层差分: %s" % delta_f)
+    _, prov, errors = merge(base_text, parse_delta(open(delta_f, encoding="utf-8").read()), relpath)
+    for t, _ in sections:
+        print("  [%s] %s" % (prov[t], t))
+    for e in errors:
+        print("  ERROR " + e)
+    sys.exit(2 if errors else 0)
+
+
+def cmd_render(team, local, relpath):
+    base_f = os.path.join(team, relpath)
+    delta_f = os.path.join(local, relpath)
+    if not os.path.isfile(base_f):
+        die("基底不存在: %s" % base_f)
+    base_text = open(base_f, encoding="utf-8").read()
+    if not os.path.isfile(delta_f):
+        sys.stdout.write(base_text)  # 快路径：无差分即基底
+        return
+    merged, _, errors = merge(base_text, parse_delta(open(delta_f, encoding="utf-8").read()), relpath)
+    sys.stdout.write(merged)
+    if errors:
+        for e in errors:
+            print("ERROR: " + e, file=sys.stderr)
+        sys.exit(2)
+
+
+def deep_merge(a, b):
+    """字典递归合并，其余类型 b(项目) 覆盖 a(团队)；数组整体替换"""
+    if isinstance(a, dict) and isinstance(b, dict):
+        out = dict(a)
+        for k, v in b.items():
+            out[k] = deep_merge(a[k], v) if k in a else v
+        return out
+    return b
+
+
+def load_json(path):
+    if not os.path.isfile(path):
+        return {}
+    return json.load(open(path, encoding="utf-8"))
+
+
+def cmd_config(team, local, name):
+    tcfg = load_json(os.path.join(team, "workflows", name + ".config.json"))
+    lcfg = load_json(os.path.join(local, "workflows", name + ".config.json"))
+    print(json.dumps(deep_merge(tcfg, lcfg), ensure_ascii=False, indent=2))
+
+
+def iter_deltas(local):
+    if not os.path.isdir(local):
+        return
+    for root, _dirs, files in os.walk(local):
+        if ".meta" in root.split(os.sep):
+            continue
+        for f in sorted(files):
+            if f.endswith((".md", ".json")):
+                full = os.path.join(root, f)
+                yield os.path.relpath(full, local), full
+
+
+def cmd_check(team, local):
+    conflicts, errors, warnings, plain = [], [], [], []
+    for rel, full in iter_deltas(local):
+        if rel.endswith(".json"):
+            plain.append(rel)
+            continue
+        base_f = os.path.join(team, rel)
+        if not os.path.isfile(base_f):
+            errors.append("%s: 基底不存在" % rel)
+            continue
+        delta_ops = parse_delta(open(full, encoding="utf-8").read())
+        _, sections = parse_sections(open(base_f, encoding="utf-8").read())
+        index = {t: b for t, b in sections}
+        _, _, merr = merge(open(base_f, encoding="utf-8").read(), delta_ops, rel)
+        errors.extend(merr)
+        mp = meta_path(local, rel)
+        meta = load_json(mp).get("fingerprint", {}) if os.path.isfile(mp) else None
+        if meta is None and any(o in ("替换", "删除") for o, _, _ in delta_ops):
+            warnings.append("%s: 未烘焙基线，冲突无法判定（运行 resolve --bake %s）" % (rel, rel))
+        for op, sect, _ in delta_ops:
+            if op not in ("替换", "删除") or sect not in index:
+                continue
+            cur = section_sha(sect, index[sect])
+            if meta is None:
+                continue
+            rec = meta.get(op + ":" + sect)
+            if rec is None:
+                warnings.append("%s: %s:%s 无基线记录（重新 --bake）" % (rel, op, sect))
+            elif rec != cur:
+                conflicts.append("%s: 团队层已更新【%s】节，本项目保持项目版（以项目为准）；如需继承团队版，删除该差分操作后重新生成" % (rel, sect))
+    for rel in plain:
+        print("[config] %s（参数深合并，项目键覆盖团队键）" % rel)
+    for w in warnings:
+        print("WARN  " + w)
+    for c in conflicts:
+        print("CONFLICT  " + c)
+    for e in errors:
+        print("ERROR  " + e)
+    if conflicts or errors:
+        sys.exit(2)
+
+
+def cmd_list(team, local):
+    found = False
+    for rel, full in iter_deltas(local):
+        found = True
+        if rel.endswith(".json"):
+            print("[config] %s" % rel)
+            continue
+        ops = parse_delta(open(full, encoding="utf-8").read())
+        desc = ", ".join("%s:%s" % (o, s) for o, s, _ in ops) or "(空差分)"
+        print("[delta]  %s  (%s)" % (rel, desc))
+    if not found:
+        print("(无项目层差分 — 全部继承团队层)")
+
+
+def cmd_bake(team, local, relpath):
+    base_f = os.path.join(team, relpath)
+    delta_f = os.path.join(local, relpath)
+    if not os.path.isfile(base_f):
+        die("基底不存在: %s" % base_f)
+    if not os.path.isfile(delta_f):
+        die("差分不存在: %s" % delta_f)
+    delta_ops = parse_delta(open(delta_f, encoding="utf-8").read())
+    _, sections = parse_sections(open(base_f, encoding="utf-8").read())
+    index = {t: b for t, b in sections}
+    fp = {}
+    for op, sect, _ in delta_ops:
+        if op in ("替换", "删除") and sect in index:
+            fp[op + ":" + sect] = section_sha(sect, index[sect])
+    mp = meta_path(local, relpath)
+    os.makedirs(os.path.dirname(mp), exist_ok=True)
+    json.dump({"fingerprint": fp,
+               "baked_at": datetime.datetime.now().isoformat(timespec="seconds"),
+               "base": base_f},
+              open(mp, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    print("OK 已记录 %d 条基线指纹 → %s" % (len(fp), mp))
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__)
+        sys.exit(1)
+    team_o, local_o, rest = parse_args(sys.argv[1:])
+    cmd = rest[0] if rest else ""
+    arg = rest[1] if len(rest) > 1 else None
+    if cmd in ("--render", "--bake") or (cmd and not cmd.startswith("--")):
+        if not arg:
+            die("需要 <relpath> 参数，如 roles/qa.md")
+        team, local = locate(team_o, local_o)
+        if cmd == "--render":
+            cmd_render(team, local, arg)
+        elif cmd == "--bake":
+            cmd_bake(team, local, arg)
+        else:
+            cmd_status(team, local, arg)
+        return
+    team, local = locate(team_o, local_o)
+    if cmd == "--config" and arg:
+        cmd_config(team, local, arg)
+    elif cmd == "--check":
+        cmd_check(team, local)
+    elif cmd == "--list":
+        cmd_list(team, local)
+    elif cmd in ("--help", "-h"):
+        print(__doc__)
+    else:
+        print(__doc__)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
