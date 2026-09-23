@@ -1,5 +1,5 @@
 /* zcode-workflow
-description: iOS 里程碑引导流水线（PRD 分层拆解 → 设计/架构/QA 三方评审 → UI 概念稿 → 架构选型与模块拆解 ∥ QA 测试用例 → 模块 git worktree 隔离并行 TDD 开发并合并 → 架构代码审核循环 → QA 实机测试 → 完毕提示上架，未经用户确认绝不上传）
+description: iOS 里程碑引导流水线（PRD 分层拆解 → 设计/架构/QA 三方评审 → UI 概念稿 → 架构选型与模块拆解 ∥ QA 测试用例 → 模块 git worktree 隔离并行 TDD（编译互不干扰）→ QA 串行单测验证 → 架构师逐分支评审并亲自合并 → QA 实机测试 → 完毕提示上架，未经用户确认绝不上传）
 args:
   milestone: { type: string, required: true, description: 里程碑标识（kebab-case，用于分支与文档命名） }
   scheme: { type: string, required: false, description: xcodebuild scheme，默认 Main }
@@ -50,12 +50,20 @@ interface TestCaseSuite {
 interface ModuleDev {
   /** 模块名 */
   module: string;
-  /** 是否按 TDD 完成（测试先行且模块单元测试通过） */
+  /** 是否按 TDD 完成（测试先行、build-for-testing 编译通过、改动已提交模块分支） */
   done: boolean;
-  /** 本模块单元测试数 */
+  /** 本模块单元测试用例数（运行验证由 QA 串行执行，不由工程师自跑） */
   unitTests: number;
   /** 实现说明 */
   summary: string;
+}
+interface ModuleVerify {
+  /** 模块名 */
+  module: string;
+  /** 该模块定向单元测试是否全部通过 */
+  passed: boolean;
+  /** 失败用例清单与原因（通过时为空） */
+  feedback: string;
 }
 interface CodeReview {
   /** 是否通过架构代码审核 */
@@ -227,31 +235,11 @@ const baselineSha = baseRev.stdout.trim();
 const topRev = await world.run("git", ["rev-parse", "--show-toplevel"]);
 const repoRoot = topRev.stdout.trim();
 
-const FALLBACK_SIMS = ["iPhone 17 Pro", "iPhone 17", "iPhone 16 Pro", "iPhone 15", "iPhone 14"];
-let simNames: string[] = [];
-try {
-  const sims = await world.run("xcrun", ["simctl", "list", "devices", "available", "--json"]);
-  if (sims.exitCode === 0) {
-    const parsed = JSON.parse(sims.stdout) as { devices?: Record<string, Array<{ name?: string }>> };
-    for (const list of Object.values(parsed.devices ?? {})) {
-      for (const dev of list ?? []) {
-        if (dev?.name && dev.name.startsWith("iPhone") && !simNames.includes(dev.name)) {
-          simNames.push(dev.name);
-        }
-      }
-    }
-  }
-} catch {
-  simNames = [];
-}
-const simFor = (i: number): string => simNames[i] || FALLBACK_SIMS[i % FALLBACK_SIMS.length];
-
-const moduleEngines = plan.modules.map((mod, i) => ({
+const moduleEngines = plan.modules.map((mod) => ({
   mod,
   eng: agent(`工程师-${mod}`, { system: HONESTY }),
   wtPath: `.worktrees/${milestone}/${mod}`,
   wtBranch: `${branch}-wt/${mod}`,
-  sim: simFor(i),
 }));
 for (const m of moduleEngines) {
   let added = (await world.run("git", ["worktree", "add", m.wtPath, "-b", m.wtBranch])).exitCode === 0;
@@ -270,70 +258,83 @@ for (const m of moduleEngines) {
     };
   }
 }
-log(`已为 ${moduleEngines.length} 个模块建好独立工作树与专属模拟器，基线提交 ${baselineSha.slice(0, 8)}`);
+log(`已为 ${moduleEngines.length} 个模块建好独立工作树（DerivedData 按工程路径隔离，并行编译互不干扰），基线提交 ${baselineSha.slice(0, 8)}`);
 
-const CONFLICT_LINE = /^(UU|AA|DD|AU|UA|DU|UD)\s/;
-const syncModuleBranches = async (): Promise<string> => {
-  for (const { mod, eng, wtPath, wtBranch } of moduleEngines) {
-    const residue = await world.run("git", ["-C", wtPath, "status", "--porcelain"]);
+const commitResidue = async (only?: { mod: string; wtPath: string }): Promise<void> => {
+  for (const t of only ? [only] : moduleEngines) {
+    const residue = await world.run("git", ["-C", t.wtPath, "status", "--porcelain"]);
     if (residue.exitCode === 0 && residue.stdout.trim()) {
-      await world.run("git", ["-C", wtPath, "add", "-A"]);
-      await world.run("git", ["-C", wtPath, "commit", "-m", `${mod}: 模块改动（流水线代提交）`]);
-    }
-    const mg = await world.run("git", ["merge", "--no-ff", "--no-edit", "-m", `合并模块 ${mod}`, wtBranch]);
-    if (mg.exitCode !== 0) {
-      await eng.ask(
-        `你负责的模块分支 ${wtBranch} 并入 ${branch} 时出现冲突（主工作树 ${repoRoot} 现处于合并未完成状态，git status 可见冲突文件）。` +
-          `请在主工作树解决属于本模块的冲突文件后 git add 并 git commit 完成合并；不要改动其他模块的文件。用中文。`,
-      );
-      const st = await world.run("git", ["status", "--porcelain"]);
-      if (st.exitCode !== 0 || st.stdout.split("\n").some((l) => CONFLICT_LINE.test(l))) return mod;
+      await world.run("git", ["-C", t.wtPath, "add", "-A"]);
+      await world.run("git", ["-C", t.wtPath, "commit", "-m", `${t.mod}: 模块改动（流水线代提交）`]);
     }
   }
-  return "";
 };
 
 let devApproved = false;
 let lastReviewFeedback = "";
+let lastQaFeedback = "";
 let devSummaries: ModuleDev[] = [];
 for (let round = 1; round <= devRounds; round++) {
   phase("各模块工程师在独立工作树并行开发与修复");
   devSummaries = await Promise.all(
-    moduleEngines.map(({ mod, eng, wtPath, wtBranch, sim }) =>
+    moduleEngines.map(({ mod, eng, wtPath, wtBranch }) =>
       eng.ask<ModuleDev>(
         (round === 1
           ? `先在主工作树 ${repoRoot} 下运行 python3 .team/scripts/resolve --render roles/ios-engineer.md，读取你的生效角色卡并严格按其履职。\n` +
             `你负责模块「${mod}」。必读：PRD（${prd.path}）、UI 概念稿（${concept.path}）、架构总览与 ADR（${plan.path}）。\n` +
             `你在专属工作树 ${repoRoot}/${wtPath}（分支 ${wtBranch}，自基线 ${baselineSha.slice(0, 8)} 拉出）内开发：` +
-            `所有文件编辑、编译与定向单测都在该目录下进行，不碰主工作树，不动其他模块的文件。`
-          : `架构师审核未通过，回到你的工作树 ${repoRoot}/${wtPath}（分支 ${wtBranch}），按以下建议修复模块「${mod}」并逐条回应：\n${lastReviewFeedback}`) +
-        `\n硬性要求：TDD——先写单元测试用例再实现，本模块单元测试必须通过（可定向运行）；` +
-        `编译与测试一律使用你专属的模拟器 -destination 'platform=iOS Simulator,name=${sim}'（多模块并行编译，不要改用其他模拟器）；` +
-        `新文件放进本模块目录（工程用文件夹同步组自动纳入，不要手改 project.pbxproj）。` +
-        `不要跑全量 xcodebuild test（流水线统一跑）。完成后把本模块全部改动 commit 到 ${wtBranch}（不要 push）。用中文工作与汇报。`,
+            `所有文件编辑与编译都在该目录下进行，不碰主工作树，不动其他模块的文件。`
+          : `上一轮验证或评审未通过，回到你的工作树 ${repoRoot}/${wtPath}（分支 ${wtBranch}），修复模块「${mod}」并逐条回应：\n${lastReviewFeedback}${lastQaFeedback ? `\nQA 单测验证反馈：${lastQaFeedback}` : ""}`) +
+        `\n硬性要求：TDD——先写单元测试用例再实现；` +
+        `编译自检只跑 xcodebuild build-for-testing（scheme=${scheme}，在你的工作树内运行，各工作树 DerivedData 相互独立）；` +
+        `不要在模拟器上运行测试——单元测试的运行验证统一由 QA 串行执行（验证资源集中管理）；` +
+        `新文件放进本模块目录（工程用文件夹同步组自动纳入，不要手改 project.pbxproj）；不要跑全量 xcodebuild test。` +
+        `完成后把本模块全部改动 commit 到 ${wtBranch}（不要 push）。用中文工作与汇报。`,
       ),
     ),
   );
-  phase("把各模块分支合并回主线");
-  const conflictMod = await syncModuleBranches();
-  if (conflictMod) {
-    await tcP;
-    return {
-      conclusion: `模块「${conflictMod}」的分支并入 ${branch} 时冲突未能解决，流水线停止（各模块工作树与分支保留在 .worktrees/ 与 ${branch}-wt/ 前缀下，人工处理后续跑可复用）。`,
-      findings: [{ where: branch, what: `模块 ${conflictMod} 合并冲突未解决`, evidence: "git status 存在未合并条目", status: "verified" as const, severity: "high" as const }],
-      verified: [],
-      notCovered: ["架构审核与实机测试未开始"],
-    };
+  await commitResidue();
+
+  phase("QA 串行验证各模块单元测试");
+  lastQaFeedback = "";
+  let allVerified = true;
+  for (const m of moduleEngines) {
+    const verifyAsk =
+      `继续以 QA 身份履职。你是验证资源的独占者，各模块验证必须串行逐个进行，一次只验一个：` +
+      `现在只验证模块「${m.mod}」——工作树 ${repoRoot}/${m.wtPath}，工程师已用 build-for-testing 备好测试产物，` +
+      `优先 xcodebuild test-without-building 定向运行该模块的单元测试（产物不可用则退回 xcodebuild test 定向运行；` +
+      `scheme=${scheme}，模拟器自选——串行执行无争用）。只验证该模块，不跑全量。用中文汇报。`;
+    let verify = await qa.ask<ModuleVerify>(verifyAsk);
+    if (!verify.passed) {
+      await m.eng.ask(
+        `QA 串行验证你的模块「${m.mod}」未通过：\n${verify.feedback}\n` +
+          `回到工作树 ${repoRoot}/${m.wtPath} 修复并 commit（不要自己跑模拟器测试，修完提交即可，QA 会复审）。用中文。`,
+      );
+      await commitResidue(m);
+      verify = await qa.ask<ModuleVerify>(`复审模块「${m.mod}」（工作树 ${repoRoot}/${m.wtPath}）：${verifyAsk}`);
+    }
+    if (!verify.passed) {
+      allVerified = false;
+      lastQaFeedback += `模块 ${m.mod}：${verify.feedback}\n`;
+    }
   }
-  phase("架构师代码审核");
+  report(
+    { stage: "QA 单测验证", round, result: allVerified ? "通过" : "存在失败", note: lastQaFeedback ? lastQaFeedback.slice(0, 120) : `${plan.modules.length} 个模块全部通过` },
+    "stages",
+  );
+  log(`QA 串行验证第 ${round} 轮：${allVerified ? "全部通过" : "存在失败模块"}`);
+
+  phase("架构师逐模块分支评审并合并");
   const review = await architect.ask<CodeReview>(
-    `继续以架构师身份履职。审核里程碑「${milestone}」的全部模块改动：` +
-      `各模块已在独立工作树并行开发并合并回 ${branch}，用 git log ${baselineSha}..HEAD 与 git diff ${baselineSha}..HEAD 查看累计改动` +
-      `（.worktrees/ 是并行开发的工作树目录，忽略它）。对照你产出的 ${plan.path} 与 ADR，逐条给结论与依据。` +
-      `报告写入 reports/${milestone}-arch-review.md。用中文工作。`,
+    `继续以架构师身份履职。各模块已在独立分支完成开发${allVerified ? "并通过 QA 单测验证" : "（注意：部分模块未通过 QA 单测验证，未通过的分支不要合并）"}。` +
+      `逐分支评审：对每个模块分支（${moduleEngines.map((m) => m.wtBranch).join("、")}），` +
+      `用 git diff ${baselineSha}..<该分支> 查看自基线以来的全部改动，对照你产出的 ${plan.path} 与 ADR 逐条给结论与依据。` +
+      `评审通过且 QA 验证通过的分支，由你亲自执行 git merge --no-ff --no-edit 合并进 ${branch}` +
+      `（合并冲突自行解决——你是模块边界的定义者；确实无法两全的分支不合并，在反馈中写明要求）。` +
+      `全部模块处理完后，报告写入 reports/${milestone}-arch-review.md。用中文工作。`,
   );
   lastReviewFeedback = review.feedback;
-  devApproved = review.approved;
+  devApproved = review.approved && allVerified;
   report(
     {
       stage: "架构审核",
@@ -343,7 +344,7 @@ for (let round = 1; round <= devRounds; round++) {
     },
     "stages",
   );
-  log(`架构审核第 ${round} 轮：${devApproved ? "通过" : "打回"}`);
+  log(`架构审核第 ${round} 轮：${devApproved ? "通过并合并" : "打回"}`);
   if (devApproved) break;
 }
 if (!devApproved) {
@@ -380,22 +381,27 @@ for (let round = 1; round <= qaRounds; round++) {
   log(`实机测试第 ${round} 轮：${device.defects} 项缺陷，已打回修复`);
   phase("工程师在各自工作树按缺陷并行修复");
   await Promise.all(
-    moduleEngines.map(({ mod, eng, wtPath, wtBranch, sim }) =>
+    moduleEngines.map(({ mod, eng, wtPath, wtBranch }) =>
       eng.ask(
         `实机测试发现缺陷，回到你的工作树 ${repoRoot}/${wtPath}（分支 ${wtBranch}）修复属于模块「${mod}」的部分并逐条回应：\n${lastDefects}\n` +
-          `修复后补齐/更新对应单元测试（用你的专属模拟器 -destination 'platform=iOS Simulator,name=${sim}' 定向运行）。` +
-          `完成后把修复 commit 到 ${wtBranch}。不要跑全量 xcodebuild test（流水线统一跑）。`,
+          `修复后补齐/更新对应单元测试并 commit 到 ${wtBranch}（不要在模拟器上跑测试，也不要跑全量 xcodebuild test——验证统一由 QA 与流水线执行）。`,
       ),
     ),
   );
-  phase("把修复后的各模块分支再次合并回主线");
-  const fixConflict = await syncModuleBranches();
-  if (fixConflict) {
+  await commitResidue();
+  phase("架构师复审缺陷修复分支并合并");
+  const fixReview = await architect.ask<CodeReview>(
+    `继续以架构师身份履职。工程师已按实机缺陷在各模块分支完成修复。` +
+      `逐分支查看各模块分支相对 ${branch} 的增量（git log ${branch}..<分支> 与 git diff ${branch}..<分支>），` +
+      `确认修复合理且不破坏架构约束后，把每个通过复审的分支 git merge --no-ff --no-edit 合并进 ${branch}` +
+      `（冲突自行解决，无法两全的不合并并说明）。合并结果摘要写入 reports/${milestone}-fix-review.md。用中文工作。`,
+  );
+  if (!fixReview.approved) {
     return {
-      conclusion: `模块「${fixConflict}」的缺陷修复分支并入 ${branch} 时冲突未能解决，流水线停止（工作树与分支已保留，人工处理后续跑可复用）。`,
-      findings: [{ where: branch, what: `模块 ${fixConflict} 修复合并冲突未解决`, evidence: "git status 存在未合并条目", status: "verified" as const, severity: "high" as const }],
+      conclusion: `缺陷修复未通过架构师复审：${fixReview.feedback}。流水线停止（各模块工作树与分支已保留，人工处理后续跑可复用）。`,
+      findings: [{ where: branch, what: "缺陷修复合并未完成", evidence: fixReview.feedback, status: "verified" as const, severity: "high" as const }],
       verified: [`实机测试已发现缺陷并立案（报告 ${device?.reportPath ?? "未生成"}）`],
-      notCovered: ["缺陷修复未合入主线，最终门禁未运行"],
+      notCovered: ["缺陷修复未全部合入主线，最终门禁未运行"],
     };
   }
 }
@@ -430,7 +436,7 @@ const reportLines = [
   `- PRD：${prd.path}（${prd.l1Count} 个 L1 模块，最大 ${prd.maxDepth} 级拆解）`,
   `- UI 概念稿：${concept.path}`,
   `- 架构与模块拆解：${plan.path}（模块：${plan.modules.join("、")}）`,
-  `- 并行开发：各模块 git worktree 隔离（分支已合并回 ${branch}，工作树已清理）`,
+  `- 并行开发：git worktree 隔离 + QA 串行单测验证 + 架构师评审合并（模块分支已并入 ${branch}，工作树已清理）`,
   `- 模块交付：${devSummaries.map((d) => `${d.module}（${d.unitTests} 个单测${d.done ? "" : "，未完成"}）`).join("、")}`,
   `- 测试用例：${testCases.path}（${testCases.caseCount} 条）`,
   `- 实机测试：${device?.reportPath ?? "未生成"}${device?.needsUser && device.sopPath ? `（需要用户配合，SOP：${device.sopPath}）` : ""}`,
@@ -457,7 +463,7 @@ return {
   ],
   verified: gateBlocked
     ? ["PRD 三方评审、架构代码审核（报告落盘）"]
-    : [`完整测试套件 xcodebuild test -scheme ${scheme} 由脚本统一运行并以退出码判定`, "PRD 三方评审、架构代码审核（报告落盘）"],
+    : ["QA 串行单测验证（逐模块定向执行）", `完整测试套件 xcodebuild test -scheme ${scheme} 由脚本统一运行并以退出码判定`, "PRD 三方评审、架构代码审核（报告落盘）"],
   notCovered: [
     ...(gateBlocked ? ["完整测试套件无法运行（xcodebuild 不可用或超时），最终门禁未生效"] : []),
     "上架 / TestFlight 上传与提交审核（须用户确认后由发布流程执行，本流水线绝不自动进行）",
