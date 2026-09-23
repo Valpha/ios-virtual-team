@@ -1,0 +1,6 @@
+{
+  "scheme": "Main",
+  "prdRounds": 2,
+  "devRounds": 2,
+  "qaRounds": 2
+}

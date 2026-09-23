@@ -78,14 +78,27 @@ resolve --bake roles/qa.md     # 记录当前基底指纹（写差分后必跑�
 5. **绝不 rm/mv `.team/` 下的任何路径**：软链接穿透，删项目内路径 = 删全局文件。
    团队层的回退一律走 `git -C ~/.zcode/team checkout -- <file>`。
 
-## 流水线运行手册（feature-pipeline）
+## 流水线运行手册
+
+### feature-pipeline（单 feature 交付）
 
 1. `resolve --config feature-pipeline` 得到本项目生效参数。
 2. 以**团队层源码路径**启动（不复制逻辑）：
    CreateWorkflow `path` = `<本项目>/.team/workflows/feature-pipeline.ts`，
    args = 上一步合并参数 + `feature`（本次 feature 名）。
 3. 子 agent 由流水线按渲染后的生效角色卡履职；门禁 = `qa.passed && archReview.passed`。
-4. 流水线逻辑改动只发生在团队层；项目差异一律走参数差分（config.json 深合并）。
+
+### bootstrap（里程碑引导：PRD → 实机测试完毕）
+
+1. `resolve --config bootstrap` 得到本项目生效参数（prdRounds / devRounds / qaRounds 等）。
+2. CreateWorkflow `path` = `<本项目>/.team/workflows/bootstrap.ts`，
+   args = 合并参数 + `milestone`（里程碑名，kebab-case）。
+3. 流程：产品产出分层 PRD（L1/L2 至少两级，最多 4 级）→ 设计/架构/QA 三方并行评审
+   （任一异议打回产品返工）→ 设计师出 UI 概念稿 → 架构师选型+模块拆解+可编译骨架
+   ∥ QA 编写 TestCase → 各模块工程师并行 TDD 开发 → 架构师代码审核（不通过带建议打回循环）
+   → QA 实机测试（需要用户配合时出 SOP 并升级询问；缺陷打回工程师修复循环）
+   → 脚本统一跑完整测试套件做最终门禁 → 报告**提示可上架，未经用户确认绝不自动上传**。
+4. 两条流水线逻辑改动只发生在团队层；项目差异一律走参数差分（config.json 深合并）。
 
 ## 目录结构
 
