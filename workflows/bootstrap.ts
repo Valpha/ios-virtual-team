@@ -1,5 +1,5 @@
 /* zcode-workflow
-description: iOS 里程碑引导流水线（PRD 分层拆解 → 设计/架构/QA 三方评审 → UI 概念稿 → 架构选型与模块拆解 ∥ QA 测试用例 → 模块 git worktree 隔离并行 TDD（编译互不干扰）→ QA 串行单测验证 → 架构师逐分支评审并亲自合并 → QA 实机测试 → 完毕提示上架，未经用户确认绝不上传）
+description: iOS 里程碑引导流水线（PRD 分层拆解 → 设计/架构/QA 三方评审 → UI 概念稿 → 架构选型与模块拆解并经用户亲自确认 → ∥ QA 测试用例 → 模块 git worktree 隔离并行 TDD（编译互不干扰）→ QA 串行单测验证 → 架构师逐分支评审并亲自合并 → QA 实机测试 → 完毕提示上架，未经用户确认绝不上传）
 args:
   milestone: { type: string, required: true, description: 里程碑标识（kebab-case，用于分支与文档命名） }
   scheme: { type: string, required: false, description: xcodebuild scheme，默认 Main }
@@ -38,6 +38,8 @@ interface ArchPlan {
   modules: string[];
   /** 一句话：技术选型结论 */
   summary: string;
+  /** 用户是否已亲自审阅并确认架构与模块划分（经升级机制获用户批准） */
+  userApproved: boolean;
 }
 interface TestCaseSuite {
   /** 测试用例文档路径 */
@@ -213,7 +215,11 @@ const archP = architect.ask<ArchPlan>(
     `把必要决策落成 docs/architecture/adr/ 下的 ADR、搭好可编译的工程骨架（模块目录与协议占位）。` +
     `模块名唯一、kebab-case，且各模块的文件/目录互不重叠（下游将并行开发）。` +
     `完成后把骨架与文档改动 commit 到 ${branch}（各模块稍后从该提交拉出并行工作树）；` +
-    `同时把 .worktrees/ 追加进 .gitignore（没有则创建）并一并提交——那是并行开发的工作树目录，绝不能被 git 跟踪。用中文工作。`,
+    `同时把 .worktrees/ 追加进 .gitignore（没有则创建）并一并提交——那是并行开发的工作树目录，绝不能被 git 跟踪。\n` +
+    `提交完成、返回结果之前必须经过用户确认门：通过升级机制把方案摘要（技术选型结论、模块清单、ADR 清单、` +
+    `docs/architecture/overview.md 路径）发给用户亲自审阅，明确询问"架构与模块划分是否批准、是否可以开始并行开发"；` +
+    `用户批准后才返回 userApproved=true。用户提出异议就按意见修订、commit 后再次请求确认；` +
+    `升级次数用尽仍未获用户确认时，如实返回 userApproved=false——绝不自行代表用户批准。用中文工作。`,
 );
 phase("QA 编写测试用例");
 const tcP = qa.ask<TestCaseSuite>(
@@ -222,6 +228,15 @@ const tcP = qa.ask<TestCaseSuite>(
     `每条用例关联需求编号并给出判断条件。研发尚在开发，暂不执行测试。用中文工作。`,
 );
 const plan = await archP;
+if (!plan.userApproved) {
+  await tcP;
+  return {
+    conclusion: `架构与模块划分未获用户亲自确认，流水线在模块开发前停止。架构文档见 ${plan.path}（分支 ${branch}），可人工修订或调整意见后重跑流水线（已有产物与分支会被复用）。`,
+    findings: [{ where: plan.path, what: "架构方案未获用户确认", evidence: "架构师经升级机制请求用户批准，未获通过", status: "verified" as const, severity: "high" as const }],
+    verified: ["PRD 三方评审（已通过）"],
+    notCovered: ["模块并行开发、实机测试与最终门禁未开始（测试用例文档已产出，见 Tests/）"],
+  };
+}
 
 phase("为各模块创建并行开发的独立工作树");
 await world.run("git", ["worktree", "prune"]);
