@@ -6,7 +6,7 @@ args:
   scheme: { type: string, required: false, description: xcodebuild scheme，默认 Main }
   hasUI: { type: boolean, required: false, description: 是否包含设计师 UI 规格环节，默认 true }
   maxRounds: { type: number, required: false, description: 评审打回后最大重试轮数，默认 2 }
-  destination: { type: string, required: false, description: xcodebuild -destination 参数，如 "platform=iOS Simulator,name=iPhone 16" }
+  destination: { type: string, required: false, description: xcodebuild 的 -destination 完整参数串（实机或模拟器；值由调用方整串传入） }
 */
 
 interface UiSpecResult {
