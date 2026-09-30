@@ -4,7 +4,7 @@ args:
   change: { type: string, required: true, description: 变更标识（kebab-case，用于分支与报告命名） }
   description: { type: string, required: true, description: 需求变更描述（背景、期望行为、验收期望） }
   scheme: { type: string, required: false, description: xcodebuild scheme，默认 Main }
-  destination: { type: string, required: false, description: xcodebuild -destination 参数，如 "platform=iOS Simulator,name=iPhone 16" }
+  destination: { type: string, required: false, description: xcodebuild 的 -destination 完整参数串（实机或模拟器；值由调用方整串传入） }
   prdRounds: { type: number, required: false, description: PRD 三方评审返工最大轮数，默认 2 }
   maxRounds: { type: number, required: false, description: 实现评审打回后最大重试轮数，默认 2 }
 */
