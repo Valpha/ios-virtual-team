@@ -204,7 +204,7 @@ const reportLines = [
 ];
 await artifact.markdown("report", reportLines.join("\n"), {
   title: `Feature 流水线报告：${feature}`,
-  description: `${passed ? "已通过" : "未通过"}——${impl.summary}`,
+  description: `${passed ? "已通过" : "未通过"}——${impl.summary.length > 180 ? impl.summary.slice(0, 180) + "…" : impl.summary}`,
   primary: true,
 });
 
